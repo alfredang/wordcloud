@@ -1,15 +1,17 @@
 /* =============================================================
    FIREBASE CONFIGURATION
-   Auto-generated from Firebase CLI for project: wordcloud-live
+   Values are injected at build time by GitHub Actions.
+   For local development, create firebase-config.local.js with
+   your actual credentials (it's gitignored).
    ============================================================= */
 const FIREBASE_CONFIG = {
-  apiKey: "AIzaSyARkc7ebEtCW9jYqUdtbZevDg3lL9F0YVE",
-  authDomain: "wordcloud-live.firebaseapp.com",
-  databaseURL: "https://wordcloud-live-default-rtdb.firebaseio.com",
-  projectId: "wordcloud-live",
-  storageBucket: "wordcloud-live.firebasestorage.app",
-  messagingSenderId: "223206575168",
-  appId: "1:223206575168:web:755550cfd674905aa463a5"
+  apiKey: "__FIREBASE_API_KEY__",
+  authDomain: "__FIREBASE_AUTH_DOMAIN__",
+  databaseURL: "__FIREBASE_DATABASE_URL__",
+  projectId: "__FIREBASE_PROJECT_ID__",
+  storageBucket: "__FIREBASE_STORAGE_BUCKET__",
+  messagingSenderId: "__FIREBASE_MESSAGING_SENDER_ID__",
+  appId: "__FIREBASE_APP_ID__"
 };
 
 /* =============================================================
@@ -19,7 +21,7 @@ let firebaseApp = null;
 let firebaseDB = null;
 
 function isFirebaseConfigured() {
-  return FIREBASE_CONFIG.apiKey && !FIREBASE_CONFIG.apiKey.startsWith('YOUR_');
+  return FIREBASE_CONFIG.apiKey && !FIREBASE_CONFIG.apiKey.startsWith('__');
 }
 
 if (isFirebaseConfigured()) {
@@ -32,4 +34,5 @@ if (isFirebaseConfigured()) {
   }
 } else {
   console.log('[WordCloud] Firebase not configured — using localStorage sync (same-browser only)');
+  console.log('[WordCloud] For local dev, create firebase-config.local.js with your credentials');
 }
