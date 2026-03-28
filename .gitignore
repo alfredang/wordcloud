@@ -3,3 +3,6 @@
 .DS_Store
 .playwright-mcp/
 node_modules/
+.firebase/
+firebase-debug.log
+ui-debug.log

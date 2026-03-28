@@ -64,14 +64,23 @@ let participantSubmissions = []; // Track this participant's submissions
 let lastSubmitTime = 0;
 
 /* =============================================================
-   STORAGE-BASED REAL-TIME SYNC
-   Uses localStorage + storage events for cross-tab communication.
-   Replace with WebSocket/Firebase for production multi-device use.
+   REAL-TIME SYNC LAYER
+   Uses Firebase Realtime Database for cross-device sync.
+   Falls back to localStorage + BroadcastChannel if Firebase
+   is not configured.
    ============================================================= */
 const STORAGE_KEY_PREFIX = 'wc_';
+let firebaseListener = null; // Track active Firebase listener
 
 function storageKey(roomId, key) {
   return `${STORAGE_KEY_PREFIX}${roomId}_${key}`;
+}
+
+// --- Firebase sync ---
+
+function getRoomRef(roomId) {
+  if (!firebaseDB) return null;
+  return firebaseDB.ref('rooms/' + roomId);
 }
 
 function saveRoomState() {
@@ -84,19 +93,78 @@ function saveRoomState() {
     participants: [...state.participants],
     updatedAt: Date.now()
   };
+
+  // Always save to localStorage (local fallback)
   localStorage.setItem(storageKey(state.roomId, 'state'), JSON.stringify(payload));
+
+  // Save to Firebase if available
+  const ref = getRoomRef(state.roomId);
+  if (ref) {
+    ref.set(payload).catch(e => console.warn('[WordCloud] Firebase write error:', e.message));
+  }
 }
 
 function loadRoomState(roomId) {
+  // Try localStorage first (synchronous, for init)
   const raw = localStorage.getItem(storageKey(roomId, 'state'));
   if (!raw) return null;
   try { return JSON.parse(raw); }
   catch { return null; }
 }
 
-// Listen for cross-tab updates
+async function loadRoomStateFromFirebase(roomId) {
+  const ref = getRoomRef(roomId);
+  if (!ref) return null;
+  try {
+    const snapshot = await ref.once('value');
+    return snapshot.val();
+  } catch (e) {
+    console.warn('[WordCloud] Firebase read error:', e.message);
+    return null;
+  }
+}
+
+function subscribeToRoom(roomId) {
+  // Unsubscribe from previous room
+  if (firebaseListener) {
+    firebaseListener.off();
+    firebaseListener = null;
+  }
+
+  const ref = getRoomRef(roomId);
+  if (!ref) return;
+
+  firebaseListener = ref;
+  ref.on('value', (snapshot) => {
+    const data = snapshot.val();
+    if (!data) return;
+
+    // Update local state from Firebase
+    state.question = data.question || state.question;
+    state.submissions = data.submissions || [];
+    state.locked = data.locked || false;
+    state.allowDuplicates = data.allowDuplicates || false;
+    state.participants = new Set(data.participants || []);
+
+    // Also update localStorage cache
+    localStorage.setItem(storageKey(roomId, 'state'), JSON.stringify(data));
+
+    // Re-render
+    const facilView = document.getElementById('facilitator-view');
+    const partView = document.getElementById('participant-view');
+    if (facilView && !facilView.classList.contains('hidden')) {
+      renderCurrentView();
+    }
+    if (partView && !partView.classList.contains('hidden')) {
+      renderParticipant();
+    }
+  });
+}
+
+// --- localStorage / BroadcastChannel fallback ---
+
 window.addEventListener('storage', (e) => {
-  if (!state.roomId) return;
+  if (!state.roomId || firebaseDB) return; // Skip if Firebase is active
   const key = storageKey(state.roomId, 'state');
   if (e.key === key && e.newValue) {
     try {
@@ -111,11 +179,11 @@ window.addEventListener('storage', (e) => {
   }
 });
 
-// BroadcastChannel for same-origin real-time
 let bc;
 try {
   bc = new BroadcastChannel('wordcloud_sync');
   bc.onmessage = (e) => {
+    if (firebaseDB) return; // Skip if Firebase is active
     if (e.data.roomId !== state.roomId) return;
     if (e.data.type === 'state_update') {
       state.question = e.data.state.question;
@@ -130,7 +198,8 @@ try {
 
 function broadcastState() {
   saveRoomState();
-  if (bc) {
+  // BroadcastChannel for same-browser fallback
+  if (bc && !firebaseDB) {
     bc.postMessage({
       type: 'state_update',
       roomId: state.roomId,
@@ -185,11 +254,12 @@ function init() {
   }
 }
 
-function initFacilitator() {
+async function initFacilitator() {
   // Check for existing room or create new
   const savedRoom = sessionStorage.getItem('wc_host_room');
   if (savedRoom) {
-    const existing = loadRoomState(savedRoom);
+    // Try Firebase first, then localStorage
+    const existing = (firebaseDB ? await loadRoomStateFromFirebase(savedRoom) : null) || loadRoomState(savedRoom);
     if (existing) {
       state.roomId = savedRoom;
       state.question = existing.question;
@@ -204,10 +274,15 @@ function initFacilitator() {
     createNewRoom();
   }
 
+  // Subscribe to Firebase real-time updates
+  subscribeToRoom(state.roomId);
+
   document.getElementById('facilitator-view').classList.remove('hidden');
   renderFacilitator();
-  // Poll for updates (fallback for storage event edge cases)
-  setInterval(pollUpdates, 800);
+  // Poll for updates (fallback when Firebase is not available)
+  if (!firebaseDB) {
+    setInterval(pollUpdates, 800);
+  }
 }
 
 function createNewRoom() {
@@ -217,22 +292,30 @@ function createNewRoom() {
   state.participants = new Set();
   sessionStorage.setItem('wc_host_room', state.roomId);
   saveRoomState();
+  // Subscribe to the new room in Firebase
+  subscribeToRoom(state.roomId);
 }
 
-function initParticipant(roomId) {
+async function initParticipant(roomId) {
   state.roomId = roomId;
-  const existing = loadRoomState(roomId);
+
+  // Try Firebase first, then localStorage
+  const existing = (firebaseDB ? await loadRoomStateFromFirebase(roomId) : null) || loadRoomState(roomId);
   if (existing) {
     state.question = existing.question;
     state.locked = existing.locked;
     state.allowDuplicates = existing.allowDuplicates;
     state.submissions = existing.submissions || [];
+    state.participants = new Set(existing.participants || []);
   }
 
   // Register participant
   const pid = getParticipantId();
   state.participants.add(pid);
   broadcastState();
+
+  // Subscribe to Firebase real-time updates
+  subscribeToRoom(state.roomId);
 
   document.getElementById('participant-view').classList.remove('hidden');
   renderParticipant();
@@ -244,16 +327,18 @@ function initParticipant(roomId) {
   });
   pInput.focus();
 
-  // Poll for question/lock changes
-  setInterval(() => {
-    const data = loadRoomState(roomId);
-    if (data) {
-      state.question = data.question;
-      state.locked = data.locked;
-      state.allowDuplicates = data.allowDuplicates;
-      renderParticipant();
-    }
-  }, 1500);
+  // Poll for question/lock changes (fallback when Firebase is not available)
+  if (!firebaseDB) {
+    setInterval(() => {
+      const data = loadRoomState(roomId);
+      if (data) {
+        state.question = data.question;
+        state.locked = data.locked;
+        state.allowDuplicates = data.allowDuplicates;
+        renderParticipant();
+      }
+    }, 1500);
+  }
 }
 
 /* =============================================================

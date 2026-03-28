@@ -1,0 +1,15 @@
+{
+  "rules": {
+    "rooms": {
+      "$roomId": {
+        ".read": true,
+        ".write": true,
+        "submissions": {
+          "$submissionId": {
+            ".validate": "newData.hasChildren(['word', 'normalizedWord', 'timestamp', 'roomId'])"
+          }
+        }
+      }
+    }
+  }
+}
